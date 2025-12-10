@@ -154,74 +154,38 @@ def make_model_small(lr = 0.0001, inp_size = 1738, out_dim = 13, reg_param = 1e-
     model.compile(optimizer = Adam(learning_rate = lr), loss = loss, metrics = ["accuracy"])
     return model
 
-# (DEPRECATED)
+
 # This is the architecture we use in predicting different classes, uniform except for the out_dim which depends on the target variable
-"""
-def make_model(lr = 0.0001, inp_size = 1738, out_dim = 13, reg_param = 1e-4, loss = "sparse_categorical_crossentropy"):
+def make_model(lr = 0.0001, inp_size = 1738, out_dim = 2, reg_param = 1e-5, loss = "sparse_categorical_crossentropy"):
     
     reset_seed(SEED = 0)  
 
     inp = Input(shape = (inp_size,1))
-    t = MaxPooling1D(22, 22)(inp)
-
-    t = Conv1D(2, 60, padding = "valid",
-        kernel_regularizer=regularizers.L2(l2=reg_param),
-        bias_regularizer=regularizers.L2(reg_param),
-        activity_regularizer=regularizers.L2(reg_param))(t)
-    t = BatchNormalization()(t)
-    t = LeakyReLU()(t)
-    
-    t = Conv1D(8, 16, padding = "valid",
-        kernel_regularizer=regularizers.L2(l2=reg_param),
-        bias_regularizer=regularizers.L2(reg_param),
-        activity_regularizer=regularizers.L2(reg_param))(t)
-    t = BatchNormalization()(t)
-    t = LeakyReLU()(t)
-    
-    t = Flatten()(t)
-
-    t = Dense(out_dim,
-        kernel_regularizer=regularizers.L2(l2=reg_param),
-        bias_regularizer=regularizers.L2(reg_param),
-        activity_regularizer=regularizers.L2(reg_param))(t)
-
-    t = tf.keras.activations.softmax(t)
-    out = t
-
-    model = Model(inp, out)
-    model.compile(optimizer = Adam(learning_rate = lr), loss = loss, metrics = ["accuracy"])
-    return model
-"""
-
-# This is the architecture we use in predicting different classes, uniform except for the out_dim which depends on the target variable
-def make_model(lr = 0.0001, inp_size = 1738, out_dim = 13, reg_param = 1e-4, loss = "sparse_categorical_crossentropy"):
-    
-    reset_seed(SEED = 0)  
-
-    inp = Input(shape = (inp_size,1))
-    t = Conv1D(1, 22, strides = 22, padding = "valid",
+    t = Conv1D(6, 22, strides = 11, padding = "valid",
         kernel_regularizer=regularizers.L2(l2=reg_param),
         bias_regularizer=regularizers.L2(reg_param),
         activity_regularizer=regularizers.L2(reg_param))(inp)
     t = BatchNormalization()(t)
     t = LeakyReLU()(t)
 
-    t = Conv1D(3, 60, padding = "valid",
+    t = Conv1D(7, 5, strides = 3, padding = "valid",
         kernel_regularizer=regularizers.L2(l2=reg_param),
         bias_regularizer=regularizers.L2(reg_param),
         activity_regularizer=regularizers.L2(reg_param))(t)
     t = BatchNormalization()(t)
     t = LeakyReLU()(t)
-    
-    t = Conv1D(4, 13, padding = "valid",
-        kernel_regularizer=regularizers.L2(l2=reg_param),
-        bias_regularizer=regularizers.L2(reg_param),
-        activity_regularizer=regularizers.L2(reg_param))(t)
-    t = BatchNormalization()(t)
-    t = LeakyReLU()(t)
-    
-    t = Flatten()(t)
 
+    t = Conv1D(8, 3, strides = 3, padding = "valid",
+        kernel_regularizer=regularizers.L2(l2=reg_param),
+        bias_regularizer=regularizers.L2(reg_param),
+        activity_regularizer=regularizers.L2(reg_param))(t)
+    t = BatchNormalization()(t)
+    t = LeakyReLU()(t)
+
+    t = MaxPooling1D(5)(t)
+    t = Flatten()(t)
+    t = tf.nn.l2_normalize(t, axis=1)
+    
     t = Dense(out_dim,
         kernel_regularizer=regularizers.L2(l2=reg_param),
         bias_regularizer=regularizers.L2(reg_param),
@@ -255,11 +219,11 @@ class ConstrainNormMax(tf.keras.constraints.Constraint):
 
 # Feature importance layer
 class FeatureImportance1D(tf.keras.layers.Layer):  # Inherit from tf.keras.layers.Layer
-    def __init__(self, input_dim=1738, reg_param = 1e-3, **kwargs):
+    def __init__(self, input_dim=1738, increment = 1e-7, reg_param = 1e-3, **kwargs):
         super(FeatureImportance1D, self).__init__(**kwargs)
         self.input_dim = input_dim
         self.reg_param = reg_param
-        
+        self.increment = increment
     def build(self, input_shape):
         
         self.importance = self.add_weight(
@@ -271,11 +235,18 @@ class FeatureImportance1D(tf.keras.layers.Layer):  # Inherit from tf.keras.layer
             
         )
 
-        self.maximum_counter = 0
+        self.maximum_counter = self.add_weight(
+            shape=(),
+            initializer="zeros",
+            trainable=False,
+            aggregation=tf.VariableAggregation.NONE,
+            name="maximum_counter"
+        )
         self.maximum = self.add_weight(
             shape=( 1, ),
             initializer = norm_initializer, 
-            trainable = False)
+            trainable = False,
+        name='maximum')
 
     # The function of this layer simply multiplies the learnable features with the input spectrum
     def call(self, inputs, training=None):
@@ -283,7 +254,7 @@ class FeatureImportance1D(tf.keras.layers.Layer):  # Inherit from tf.keras.layer
         activation = tf.math.multiply(inputs, self.importance)
         
         if training is True and self.maximum_counter < 1:
-            self.maximum_counter += 0.0000001
+            self.maximum_counter.assign_add(self.increment)
             interpolation = self.maximum * self.maximum_counter + tf.reduce_max(activation) * (1-self.maximum_counter)
             self.maximum.assign(interpolation)
             #self.maximum.assign((self.maximum + tf.reduce_max(activation)) / 2)
@@ -298,69 +269,16 @@ class FeatureImportance1D(tf.keras.layers.Layer):  # Inherit from tf.keras.layer
         config.update({
             "input_dim": self.input_dim,
             "reg_param": self.reg_param,
-            "initializer": tf.keras.initializers.serialize(norm_sum_initializer),
-            "constraint": tf.keras.constraints.serialize(ConstrainNormSum()),
+            "initializer": tf.keras.initializers.serialize(norm_initializer),
+            "constraint": tf.keras.constraints.serialize(ConstrainNormMax()),
         })
         return config
 
 # Negative categorical entropy loss for reducing ID-accuracy
 def negative_CE(y_true, y_pred):
-    return -tf.keras.losses.CategoricalCrossentropy()(y_true, y_pred)
-    
+    return -tf.keras.losses.SparseCategoricalCrossentropy()(y_true, y_pred) * 0.1
+
 """
-def make_split_model(lr = 0.00001, inp_size = 1738, out_dims = [13, 2], reg_param = 1e-4):
-    
-    reset_seed(SEED = 0)  
-    inp = Input(shape = (inp_size,1))
-    t = Conv1D(1, 22, strides = 22, padding = "valid",
-        kernel_regularizer=regularizers.L2(l2=reg_param),
-        bias_regularizer=regularizers.L2(reg_param),
-        activity_regularizer=regularizers.L2(reg_param))(inp)
-    t = BatchNormalization()(t)
-    t = LeakyReLU()(t)
-
-    t = Conv1D(3, 60, padding = "valid",
-        kernel_regularizer=regularizers.L2(l2=reg_param),
-        bias_regularizer=regularizers.L2(reg_param),
-        activity_regularizer=regularizers.L2(reg_param))(t)
-    t = BatchNormalization()(t)
-    t = LeakyReLU()(t)
-    
-    t = Conv1D(4, 13, padding = "valid",
-        kernel_regularizer=regularizers.L2(l2=reg_param),
-        bias_regularizer=regularizers.L2(reg_param),
-        activity_regularizer=regularizers.L2(reg_param))(t)
-    t = BatchNormalization()(t)
-    t = LeakyReLU()(t)
-    
-    t_split = Flatten()(t)
-    
-    t_id = Dense(out_dims[0], activation = "softmax",
-        kernel_regularizer=regularizers.L2(reg_param),
-        bias_regularizer=regularizers.L2(reg_param),
-        activity_regularizer=regularizers.L2(reg_param))(t_split)
-    
-
-    t_lgm = Dense(out_dims[1], activation = "softmax",
-        kernel_regularizer=regularizers.L2(reg_param),
-        bias_regularizer=regularizers.L2(reg_param),
-        activity_regularizer=regularizers.L2(reg_param))(t_split)
-
-    out = [t_id, t_lgm]
-
-    # Store output in a list which we return
-    output = out
-    
-    model = Model(inp, output)
-    
-    model.compile(
-        optimizer= Adam(learning_rate=lr),
-        loss = "categorical_crossentropy",
-        metrics = ["accuracy"],
-    )
-    return model
-"""
-
 def make_split_model(lr = 0.00001,
                      inp_size = 1738,
                      out_dims = [13, 2],
@@ -389,24 +307,18 @@ def make_split_model(lr = 0.00001,
         activity_regularizer=regularizers.L2(reg_param))(t)
     t = BatchNormalization()(t)
     t_split = LeakyReLU()(t)
-    
-    t_id = Conv1D(out_dims[0], 2,
+
+    t_split = Flatten()(t_split)
+    t_id = Dense(out_dims[0],
         kernel_regularizer=regularizers.L2(reg_param),
         bias_regularizer=regularizers.L2(reg_param),
-        activity_regularizer=regularizers.L2(reg_param))(t_split)
-    
+        activity_regularizer=regularizers.L2(reg_param), activation = "softmax", name = "ID")(t_split)
 
-    t_lgm = Conv1D(out_dims[1], 2,
+    t_lgm = Dense(out_dims[1],
         kernel_regularizer=regularizers.L2(reg_param),
         bias_regularizer=regularizers.L2(reg_param),
-        activity_regularizer=regularizers.L2(reg_param))(t_split)
-
-    t_id = Flatten()(t_id)
-    t_lgm = Flatten()(t_lgm)
-
-    t_id = tf.keras.layers.Softmax(name = "t_id_out")(t_id)
-
-    t_lgm = tf.keras.layers.Softmax(name = "t_lgm_out")(t_lgm)
+        activity_regularizer=regularizers.L2(reg_param), activation = "softmax", name = "LGm")(t_split)
+    
 
     out = [t_id, t_lgm]
 
@@ -414,10 +326,68 @@ def make_split_model(lr = 0.00001,
     output = out
     
     model = Model(inp, output)
-    
     model.compile(
         optimizer= Adam(learning_rate=lr),
-        loss = "categorical_crossentropy",
+        loss = {"ID" : losses[0], "LGm" : losses[1]},
+        metrics = ["accuracy"],
+    )
+    return model
+"""
+
+def make_split_model(lr = 0.00001,
+                     inp_size = 1738,
+                     out_dims = [46, 2],
+                     reg_param = 1e-5,
+                     losses = ["categorical_crossentropy", "categorical_crossentropy"]):
+    
+    reset_seed(SEED = 0)  
+    inp = Input(shape = (inp_size,1))
+    t = Conv1D(6, 22, strides = 11, padding = "valid",
+        kernel_regularizer=regularizers.L2(l2=reg_param),
+        bias_regularizer=regularizers.L2(reg_param),
+        activity_regularizer=regularizers.L2(reg_param))(inp)
+    t = BatchNormalization()(t)
+    t = LeakyReLU()(t)
+
+    t = Conv1D(7, 5, strides = 3, padding = "valid",
+        kernel_regularizer=regularizers.L2(l2=reg_param),
+        bias_regularizer=regularizers.L2(reg_param),
+        activity_regularizer=regularizers.L2(reg_param))(t)
+    t = BatchNormalization()(t)
+    t = LeakyReLU()(t)
+
+    t = Conv1D(8, 3, strides = 3, padding = "valid",
+        kernel_regularizer=regularizers.L2(l2=reg_param),
+        bias_regularizer=regularizers.L2(reg_param),
+        activity_regularizer=regularizers.L2(reg_param))(t)
+    t = BatchNormalization()(t)
+    t = LeakyReLU()(t)
+
+    t = MaxPooling1D(5)(t)
+
+    t_split = Flatten()(t)
+    t_split = tf.nn.l2_normalize(t_split, axis=1)
+    
+    t_id = Dense(out_dims[0],
+        kernel_regularizer=regularizers.L2(reg_param),
+        bias_regularizer=regularizers.L2(reg_param),
+        activity_regularizer=regularizers.L2(reg_param), activation = "softmax", name = "ID")(t_split)
+
+    t_lgm = Dense(out_dims[1],
+        kernel_regularizer=regularizers.L2(reg_param),
+        bias_regularizer=regularizers.L2(reg_param),
+        activity_regularizer=regularizers.L2(reg_param), activation = "softmax", name = "LGm")(t_split)
+    
+
+    out = [t_id, t_lgm]
+
+    # Store output in a list which we return
+    output = out
+    
+    model = Model(inp, output)
+    model.compile(
+        optimizer= Adam(learning_rate=lr),
+        loss = {"ID" : losses[0], "LGm" : losses[1]},
         metrics = ["accuracy"],
     )
     return model
@@ -438,6 +408,8 @@ def make_combined_model(enc,
     t = tf.expand_dims(t, -1)
  
     id, lgm = sample_model(t)
+    id._name = "ID"
+    lgm._name = "LGm"
     
     out = [id, lgm]
     
@@ -445,13 +417,15 @@ def make_combined_model(enc,
     
     model.compile(
         optimizer= Adam(learning_rate=lr),
-        loss = losses,
-        metrics = ["accuracy"]
+        loss=[losses[0], losses[1]],       # list, not dict
+        metrics=["accuracy"]
+        #loss = {"ID" : losses[0], "LGm" : losses[1]},
+        #metrics={"ID": "accuracy", "LGm": "accuracy"}
     )
     return model
 
 # The encoder is used to transform the data using only the learned features, normalization is optional
-def make_encoder(lr = 0.0001, inp_shape = 1738):
+def make_encoder(lr = 0.0001, inp_shape = 1738, feature_max_increment = 1e-7):
     
     reset_seed(SEED = 0)
 
@@ -459,8 +433,10 @@ def make_encoder(lr = 0.0001, inp_shape = 1738):
     
     t = Flatten()(inp)
 
-    t = FeatureImportance1D(inp_shape, name = "importance")(t)
-
+    t = FeatureImportance1D(inp_shape, feature_max_increment, name = "importance")(t)
+    t = tf.expand_dims(t, axis = -1)
+    t = AveragePooling1D(pool_size = 25, strides = 1, padding = "same")(t)
+    t = tf.nn.l2_normalize(t, axis=1)
     output = t
     
     model = Model(inp, output)
