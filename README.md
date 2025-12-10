@@ -17,4 +17,4 @@ Data: https://seafile.utu.fi/d/dbaf4b8e81b5436da03a/
 
 ### Keywords: batch effect, deep learning, feature importance, glioma, Raman spectroscopy
 
-<img src="./(MANUAL)FeatureImportanceEvolution_0.gif" width="80%" height="80%"/>
+<img src="./(MANUAL)FeatureImportanceEvolution_0.gif" width="100%" height="100%"/>
